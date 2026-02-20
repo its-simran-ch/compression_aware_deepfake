@@ -1,0 +1,42 @@
+# ----- Data (large, not version-controlled) -----
+data/
+*.mp4
+*.avi
+*.zip
+*.tar.gz
+
+# ----- Model checkpoints -----
+checkpoints/
+*.pth
+*.pt
+
+# ----- Results (regenerated from scripts) -----
+results/csv/
+results/plots/
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ----- Virtual environments -----
+venv/
+env/
+.venv/
+
+# ----- Jupyter -----
+.ipynb_checkpoints/
+
+# ----- OS -----
+.DS_Store
+Thumbs.db
+
+# ----- IDE -----
+.vscode/
+.idea/
+*.swp
+*.swo

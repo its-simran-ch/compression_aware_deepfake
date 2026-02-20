@@ -1,0 +1,39 @@
+# ============================================================
+# Compression-Aware Video Deepfake Detection
+# Python 3.10+  |  Compatible with Colab / Kaggle / Mac
+# ============================================================
+
+# ----- Deep Learning -----
+torch>=2.0.0
+torchvision>=0.15.0
+
+# ----- Image / Video -----
+opencv-python-headless>=4.7.0
+Pillow>=9.0.0
+
+# ----- Signal / Frequency -----
+numpy>=1.24.0
+scipy>=1.10.0
+PyWavelets>=1.4.0
+
+# ----- ML Utilities -----
+scikit-learn>=1.2.0
+
+# ----- Visualization -----
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# ----- Progress -----
+tqdm>=4.65.0
+
+# ----- Face Detection -----
+facenet-pytorch>=2.5.2       # Provides MTCNN
+
+# ----- Demo -----
+streamlit>=1.28.0
+
+# ----- FFmpeg wrapper (optional) -----
+ffmpeg-python>=0.2.0
+
+# ----- Notebook support -----
+ipywidgets>=8.0.0
