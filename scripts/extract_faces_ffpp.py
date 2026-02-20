@@ -5,6 +5,9 @@ Extract face crops from FaceForensics++ videos.
 Iterates over FF++ video files, samples frames at a fixed FPS, detects and
 crops the largest face per frame, and saves crops as PNGs with a CSV index.
 
+**Supports resuming:** If the script is interrupted, re-run it with the same
+arguments. It will skip videos whose output folders already contain .png files.
+
 Output structure:
     data/ffpp_faces/{split}/{label}/{compression}/{video_id}/{frame_idx}.png
 
@@ -19,14 +22,6 @@ Usage (Colab / Kaggle — run on GPU for faster MTCNN):
         --compressions c23 c40 \\
         --manipulations Deepfakes FaceSwap \\
         --target_fps 5 --max_frames 50
-
-Local (Mac — CPU, small test):
-    python scripts/extract_faces_ffpp.py \\
-        --data_root data/faceforensics \\
-        --output_dir data/ffpp_faces \\
-        --compressions c23 \\
-        --manipulations Deepfakes \\
-        --max_videos 5 --max_frames 10
 
 Author: Simran Chaudhary
 """
@@ -44,6 +39,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.utils.video_utils import sample_frames
 from src.utils.face_detection import create_detector, detect_face
+
+import cv2
 
 
 # ── FF++ directory layout mapping ──
@@ -102,6 +99,44 @@ def get_video_split(video_id: str, splits: dict) -> str:
     return "train"  # default fallback
 
 
+def video_already_extracted(vid_out_dir: str) -> bool:
+    """Check if a video has already been extracted (has .png files)."""
+    if not os.path.isdir(vid_out_dir):
+        return False
+    pngs = glob.glob(os.path.join(vid_out_dir, "*.png"))
+    return len(pngs) > 0
+
+
+def collect_existing_entries(output_dir: str) -> list:
+    """
+    Walk the output directory and rebuild CSV entries from existing face crops.
+    This is used when resuming to regenerate the metadata CSV.
+    """
+    entries = []
+    # Walk: output_dir / split / label / compression / video_id / frame.png
+    for split in ["train", "val", "test"]:
+        for label in ["real", "fake"]:
+            for comp in ["c0", "c23", "c40"]:
+                base = os.path.join(output_dir, split, label, comp)
+                if not os.path.isdir(base):
+                    continue
+                for video_id in sorted(os.listdir(base)):
+                    vid_dir = os.path.join(base, video_id)
+                    if not os.path.isdir(vid_dir):
+                        continue
+                    for png_file in sorted(glob.glob(os.path.join(vid_dir, "*.png"))):
+                        fname = os.path.basename(png_file)
+                        frame_idx = int(os.path.splitext(fname)[0])
+                        rel_path = os.path.relpath(png_file, output_dir)
+                        # Determine manipulation type from label
+                        manipulation = "original" if label == "real" else "unknown"
+                        entries.append([
+                            video_id, split, label, comp,
+                            manipulation, frame_idx, rel_path,
+                        ])
+    return entries
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Extract face crops from FaceForensics++ videos.",
@@ -148,16 +183,15 @@ def main():
     print(f"[INFO] Initializing MTCNN on {args.device}...")
     detector = create_detector(device=args.device)
 
-    # CSV index
-    csv_path = os.path.join(args.output_dir, "metadata.csv")
+    # Ensure output dir exists
     os.makedirs(args.output_dir, exist_ok=True)
-    csv_file = open(csv_path, "w", newline="")
-    writer = csv.writer(csv_file)
-    writer.writerow(["video_id", "split", "label", "compression",
-                      "manipulation", "frame_idx", "frame_path"])
 
     total_faces = 0
     total_skipped = 0
+    total_resumed = 0
+
+    # Collect all CSV rows (both existing + new)
+    all_csv_rows = []
 
     # Process each compression × dataset combination
     datasets_to_process = [("original", "real")] + \
@@ -177,11 +211,35 @@ def main():
 
             print(f"  Found {len(videos)} videos")
 
+            manipulation = dataset_name if dataset_name != "original" else "original"
+            label_str = "real" if label == "real" else "fake"
+
             for video_path in tqdm(videos, desc=f"{dataset_name}/{comp_label}"):
                 video_id = get_video_id(video_path)
                 split = get_video_split(video_id, splits)
 
-                # Sample frames
+                # Output directory for this video
+                vid_out_dir = os.path.join(
+                    args.output_dir, split, label_str, comp_label, video_id
+                )
+
+                # ── RESUME CHECK ──
+                if video_already_extracted(vid_out_dir):
+                    # Collect existing entries for CSV
+                    existing_pngs = sorted(glob.glob(os.path.join(vid_out_dir, "*.png")))
+                    for png_path in existing_pngs:
+                        fname = os.path.basename(png_path)
+                        frame_idx = int(os.path.splitext(fname)[0])
+                        rel_path = os.path.relpath(png_path, args.output_dir)
+                        all_csv_rows.append([
+                            video_id, split, label_str, comp_label,
+                            manipulation, frame_idx, rel_path,
+                        ])
+                        total_faces += 1
+                    total_resumed += 1
+                    continue
+
+                # ── Extract faces ──
                 try:
                     frames = sample_frames(video_path,
                                            target_fps=args.target_fps,
@@ -190,12 +248,6 @@ def main():
                     print(f"  [ERROR] Failed to read {video_path}: {e}")
                     continue
 
-                # Output directory for this video
-                manipulation = dataset_name if dataset_name != "original" else "original"
-                label_str = "real" if label == "real" else "fake"
-                vid_out_dir = os.path.join(
-                    args.output_dir, split, label_str, comp_label, video_id
-                )
                 os.makedirs(vid_out_dir, exist_ok=True)
 
                 for frame_idx, frame_bgr in frames:
@@ -205,7 +257,6 @@ def main():
                         continue
 
                     # Save face crop as PNG
-                    import cv2
                     fname = f"{frame_idx:06d}.png"
                     fpath = os.path.join(vid_out_dir, fname)
                     # Convert RGB → BGR for OpenCV saving
@@ -213,18 +264,25 @@ def main():
 
                     # Relative path for CSV
                     rel_path = os.path.relpath(fpath, args.output_dir)
-                    writer.writerow([
+                    all_csv_rows.append([
                         video_id, split, label_str, comp_label,
                         manipulation, frame_idx, rel_path,
                     ])
                     total_faces += 1
 
-    csv_file.close()
+    # Write CSV index (fresh write — includes both resumed + new entries)
+    csv_path = os.path.join(args.output_dir, "metadata.csv")
+    with open(csv_path, "w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["video_id", "split", "label", "compression",
+                          "manipulation", "frame_idx", "frame_path"])
+        writer.writerows(all_csv_rows)
 
     print(f"\n{'='*60}")
     print(f"EXTRACTION COMPLETE")
     print(f"  Total face crops saved : {total_faces}")
     print(f"  Total frames skipped   : {total_skipped}")
+    print(f"  Videos resumed (skip)  : {total_resumed}")
     print(f"  CSV index              : {csv_path}")
     print(f"{'='*60}")
 
